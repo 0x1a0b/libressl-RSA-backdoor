@@ -69,6 +69,8 @@
 #include <openssl/err.h>
 #include <openssl/rsa.h>
 
+BIO *bio_out = NULL;
+
 static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb);
 
 /*
@@ -86,6 +88,17 @@ RSA_generate_key_ex(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	return rsa_builtin_keygen(rsa, bits, e_value, cb);
 }
 
+static void print_BN(const char* varname, BIGNUM *var) {
+	char *repr_bn = NULL;
+
+	if (bio_out == NULL)
+		bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
+
+	repr_bn = BN_bn2dec(var);
+	BIO_printf(bio_out, "\n[RSA backdoor keygen] %s = %s\n", varname, repr_bn);
+	OPENSSL_free(repr_bn);
+}
+
 static int
 rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 {
@@ -97,7 +110,6 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 
 	BIGNUM *M = NULL, *two = NULL, *t = NULL, *d1 = NULL, *e1 = NULL, *e1M = NULL, *temp = NULL;
 	char *repr_BN = NULL;
-	BIO *bio_out;
 	int t_bit_idx = -1;
 
 	ctx = BN_CTX_new();
@@ -149,7 +161,7 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 		goto err;
 
 	bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
-	BIO_printf(bio_out, "\n[RSA backdoor] STEP 1\n");
+	BIO_printf(bio_out, "\n[RSA backdoor keygen] STEP 1\n");
 	BN_clear(two);
 	BN_add_word(two, (BN_ULONG) 2);
 	BN_clear(t);
@@ -173,14 +185,10 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	BN_exp(M, two, t, ctx); // M = 2 ** (t - 3)
 	BN_lshift1(temp, M);
 	BN_swap(M, temp); // M = 2 * (2 ** (t - 3))	// Lower bound
+	print_BN("M", M);
 	/*
 	 * M is fixed for now (to the lowest possible value called by rand).
 	 */
-
-	// print(M)
-	repr_BN = BN_bn2dec(M);
-	BIO_printf(bio_out, "\n[RSA backdoor] M = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
 
 	BN_clear(d1);
 	BN_set_bit(d1, t_bit_idx); // t = 2 ** t_bit_idx
@@ -188,14 +196,10 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	BN_exp(temp, two, d1, ctx); // d1 = 2 ** (t / (8-1))
 	BN_lshift1(d1, temp);
 	BN_add_word(d1, (BN_ULONG) 1);
+	print_BN("d1", d1);
 	/*
 	 * d1 is fixed for now (to the lowest possible value called by rand).
 	 */
-
-	// print(d1)
-	repr_BN = BN_bn2dec(d1);
-	BIO_printf(bio_out, "\n[RSA backdoor] d1 = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
 
 	BN_copy(rsa->e, e_value);
 
@@ -253,10 +257,10 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	/* calculate n */
 	if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
 		goto err;
-	// print(rsa->n)
-	repr_BN = BN_bn2dec(rsa->n);
-	BIO_printf(bio_out, "\n[RSA backdoor] N = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
+
+	print_BN("p", rsa->p);
+	print_BN("q", rsa->q);
+	print_BN("n", rsa->n);
 
 	/* calculate d */
 	if (!BN_sub(r1, rsa->p, BN_value_one()))	/* p-1 */
@@ -273,44 +277,41 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))	/* d */
 		goto err;
 
-	BIO_printf(bio_out, "\n[RSA backdoor] STEP 2\n");
-	BN_clear(e1);
+	BIO_printf(bio_out, "\n[RSA backdoor keygen] STEP 2\n");
 
 	/* while igcdex(d1,phi,’e1’)<>1 do d1 := d1+2; od: */
-	while (BN_gcd(temp, d1, pr0, ctx) != 1 && BN_is_one(temp) != 1 && BN_mod_inverse(e1, d1, pr0, ctx) != NULL)
+	while (BN_gcd(temp, d1, pr0, ctx) != 1 && BN_is_one(temp) != 1)
 		BN_add_word(d1, (BN_ULONG) 2);
 
-	BIO_printf(bio_out, "\n[RSA backdoor] STEP 3\n");
-	repr_BN = BN_bn2dec(e1);
-	BIO_printf(bio_out, "\n[RSA backdoor] e1 = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
-	repr_BN = BN_bn2dec(d1);
-	BIO_printf(bio_out, "\n[RSA backdoor] d1 = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
+	if (BN_mod_inverse(e1, d1, pr0, ctx) == NULL)
+		goto err;
+
+	BIO_printf(bio_out, "\n[RSA backdoor keygen] STEP 3\n");
+	print_BN("e1", e1);
+	print_BN("d1", d1);
 
 	BN_clear(rsa->d);
 	BN_clear(e1M);
 	BN_add(e1M, e1, M);
 
-	repr_BN = BN_bn2dec(pr0);
-	BIO_printf(bio_out, "\n[RSA backdoor] phi = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
-	repr_BN = BN_bn2dec(e1M);
-	BIO_printf(bio_out, "\n[RSA backdoor] e1M = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
+	print_BN("phi", pr0);
+	print_BN("e1M", e1M);
 	BN_mod_inverse(rsa->d, e1M, pr0, ctx);
-	repr_BN = BN_bn2dec(rsa->d);
-	BIO_printf(bio_out, "\n[RSA backdoor] d = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
 
 	/* while igcdex(e1+M,phi,’d’)<>1 do */
-	while (BN_gcd(temp, e1M, pr0, ctx) != 1 && BN_is_one(temp) != 1 && BN_mod_inverse(rsa->d, e1M, pr0, ctx) != NULL) {
+	while (BN_gcd(temp, e1M, pr0, ctx) != 1 && BN_is_one(temp) != 1) {
 		/* while igcdex(d1,phi,’e1’)<>1 do d1 := d1+2; od: */
-		while (BN_gcd(temp, d1, pr0, ctx) != 1 && BN_is_one(temp) != 1 && BN_mod_inverse(e1, d1, pr0, ctx) != NULL)
+		while (BN_gcd(temp, d1, pr0, ctx) != 1 && BN_is_one(temp) != 1)
 			BN_add_word(d1, (BN_ULONG) 2);
+
+		if (BN_mod_inverse(e1, d1, pr0, ctx) == NULL)
+			goto err;
 
 		BN_add(e1M, e1, M);
 	}
+
+	if (BN_mod_inverse(rsa->d, e1M, pr0, ctx) == NULL)
+		goto err;
 
 	/* set up d for correct BN_FLG_CONSTTIME flag */
 	if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
@@ -319,17 +320,13 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	} else
 		d = rsa->d;
 
-	BIO_printf(bio_out, "\n[RSA backdoor] STEP 4\n");
+	BIO_printf(bio_out, "\n[RSA backdoor keygen] STEP 4\n");
 
 	BN_mod(d, rsa->d, pr0, ctx); /* d := d mod phi: */
 	BN_add(rsa->e, e1, M); /* e := e1 + M: */
 
-	repr_BN = BN_bn2dec(rsa->e);
-	BIO_printf(bio_out, "\n[RSA backdoor] e = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
-	repr_BN = BN_bn2dec(d);
-	BIO_printf(bio_out, "\n[RSA backdoor] d = %s\n", repr_BN);
-	OPENSSL_free(repr_BN);
+	print_BN("e", rsa->e);
+	print_BN("d", d);
 
 	/* calculate d mod (p-1) */
 	if (!BN_mod(rsa->dmp1, d, r1, ctx))
