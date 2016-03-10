@@ -177,7 +177,7 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	 * M is fixed for now (to the lowest possible value called by rand).
 	 */
 
-	// print M in decimal notation
+	// print(M)
 	repr_BN = BN_bn2dec(M);
 	BIO_printf(bio_out, "\n[RSA backdoor] M = %s\n", repr_BN);
 	OPENSSL_free(repr_BN);
@@ -192,7 +192,7 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	 * d1 is fixed for now (to the lowest possible value called by rand).
 	 */
 
-	// print d1 in decimal notation
+	// print(d1)
 	repr_BN = BN_bn2dec(d1);
 	BIO_printf(bio_out, "\n[RSA backdoor] d1 = %s\n", repr_BN);
 	OPENSSL_free(repr_BN);
@@ -253,6 +253,10 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	/* calculate n */
 	if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
 		goto err;
+	// print(rsa->n)
+	repr_BN = BN_bn2dec(rsa->n);
+	BIO_printf(bio_out, "\n[RSA backdoor] N = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
 
 	/* calculate d */
 	if (!BN_sub(r1, rsa->p, BN_value_one()))	/* p-1 */
@@ -273,7 +277,7 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	BN_clear(e1);
 
 	/* while igcdex(d1,phi,’e1’)<>1 do d1 := d1+2; od: */
-	while (BN_mod_inverse(e1, d1, pr0, ctx) != NULL && BN_is_one(e1) != 1)
+	while (BN_gcd(temp, d1, pr0, ctx) != 1 && BN_is_one(temp) != 1 && BN_mod_inverse(e1, d1, pr0, ctx) != NULL)
 		BN_add_word(d1, (BN_ULONG) 2);
 
 	BIO_printf(bio_out, "\n[RSA backdoor] STEP 3\n");
@@ -288,10 +292,21 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	BN_clear(e1M);
 	BN_add(e1M, e1, M);
 
+	repr_BN = BN_bn2dec(pr0);
+	BIO_printf(bio_out, "\n[RSA backdoor] phi = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
+	repr_BN = BN_bn2dec(e1M);
+	BIO_printf(bio_out, "\n[RSA backdoor] e1M = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
+	BN_mod_inverse(rsa->d, e1M, pr0, ctx);
+	repr_BN = BN_bn2dec(rsa->d);
+	BIO_printf(bio_out, "\n[RSA backdoor] d = %s\n", repr_BN);
+	OPENSSL_free(repr_BN);
+
 	/* while igcdex(e1+M,phi,’d’)<>1 do */
-	while (BN_mod_inverse(rsa->d, e1M, pr0, ctx) != NULL && BN_is_one(rsa->d) != 1) {
+	while (BN_gcd(temp, e1M, pr0, ctx) != 1 && BN_is_one(temp) != 1 && BN_mod_inverse(rsa->d, e1M, pr0, ctx) != NULL) {
 		/* while igcdex(d1,phi,’e1’)<>1 do d1 := d1+2; od: */
-		while (BN_mod_inverse(e1, d1, pr0, ctx) != NULL && BN_is_one(e1) != 1)
+		while (BN_gcd(temp, d1, pr0, ctx) != 1 && BN_is_one(temp) != 1 && BN_mod_inverse(e1, d1, pr0, ctx) != NULL)
 			BN_add_word(d1, (BN_ULONG) 2);
 
 		BN_add(e1M, e1, M);
