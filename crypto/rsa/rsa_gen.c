@@ -162,9 +162,7 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 
 	bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
 	BIO_printf(bio_out, "\n[RSA backdoor keygen] STEP 1\n");
-	BN_clear(two);
 	BN_add_word(two, (BN_ULONG) 2);
-	BN_clear(t);
 
 	if (bits == 1024)
 		t_bit_idx = 10;
@@ -181,7 +179,6 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	BN_set_bit(t, t_bit_idx); // t = 2 ** t_bit_idx
 
 	BN_sub_word(t, (BN_ULONG) 3);
-	BN_clear(M);
 	BN_exp(M, two, t, ctx); // M = 2 ** (t - 3)
 	BN_lshift1(temp, M);
 	BN_swap(M, temp); // M = 2 * (2 ** (t - 3))	// Lower bound
@@ -190,7 +187,6 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	 * M is fixed for now (to the lowest possible value called by rand).
 	 */
 
-	BN_clear(d1);
 	BN_set_bit(d1, t_bit_idx); // t = 2 ** t_bit_idx
 	BN_div_word(d1, (BN_ULONG) 8-1); // d1 = t / (8-1)
 	BN_exp(temp, two, d1, ctx); // d1 = 2 ** (t / (8-1))
@@ -274,8 +270,6 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 		BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
 	} else
 		pr0 = r0;
-	if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))	/* d */
-		goto err;
 
 	BIO_printf(bio_out, "\n[RSA backdoor keygen] STEP 2\n");
 
@@ -290,13 +284,10 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	print_BN("e1", e1);
 	print_BN("d1", d1);
 
-	BN_clear(rsa->d);
-	BN_clear(e1M);
 	BN_add(e1M, e1, M);
 
 	print_BN("phi", pr0);
 	print_BN("e1M", e1M);
-	BN_mod_inverse(rsa->d, e1M, pr0, ctx);
 
 	/* while igcdex(e1+M,phi,’d’)<>1 do */
 	while (BN_gcd(temp, e1M, pr0, ctx) != 1 && BN_is_one(temp) != 1) {
@@ -323,6 +314,7 @@ rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value, BN_GENCB *cb)
 	BIO_printf(bio_out, "\n[RSA backdoor keygen] STEP 4\n");
 
 	BN_mod(d, rsa->d, pr0, ctx); /* d := d mod phi: */
+	BN_copy(rsa->d, d);
 	BN_add(rsa->e, e1, M); /* e := e1 + M: */
 
 	print_BN("e", rsa->e);
